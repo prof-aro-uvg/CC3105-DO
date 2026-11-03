@@ -43,6 +43,18 @@ variable "tags" {
   default     = ["mlops", "uvg"]
 }
 
+# --- basic_config.sh ---
+variable "users" {
+  description = "Users created on every droplet: member of uvg, SSH key login, passwordless sudo for docker/docker-compose"
+  type        = list(string)
+  default     = ["mlops", "cc3105"]
+
+  validation {
+    condition     = length(var.users) > 0 && alltrue([for u in var.users : can(regex("^[a-z_][a-z0-9_-]{0,31}$", u))])
+    error_message = "Each user must be a valid Linux username (lowercase, starts with a letter or _, max 32 chars)."
+  }
+}
+
 # --- set_timezone.yml / shutdown_timer.yml ---
 variable "timezone" {
   description = "System timezone"

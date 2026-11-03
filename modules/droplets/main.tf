@@ -17,6 +17,7 @@ resource "digitalocean_droplet" "droplets" {
   # shutdown_timer.yml): runs once on first boot.
   user_data = templatefile("${path.module}/cloud-init.yaml.tftpl", {
     ssh_public_key    = data.digitalocean_ssh_key.default.public_key
+    users             = var.users
     timezone          = var.timezone
     shutdown_time     = var.shutdown_time
     container_count   = var.container_count

@@ -5,18 +5,20 @@
 # --- set_timezone.yml / shutdown_timer.yml ---
 timezone: ${timezone}
 
-# --- basic_config.sh: uvg group + mlops user (SSH key only, no password) ---
+# --- basic_config.sh: uvg group + course users (SSH key only, no password) ---
 groups:
   - uvg
 
 users:
   - default
-  - name: mlops
+%{ for user in users ~}
+  - name: ${user}
     shell: /bin/bash
     groups: [uvg]
     lock_passwd: true
     ssh_authorized_keys:
       - "${ssh_public_key}"
+%{ endfor ~}
 
 # --- docker-install.yml, playbook-docker.yml, playbook-docker-compose.yml: packages ---
 package_update: true
@@ -36,10 +38,12 @@ packages:
 
 write_files:
   # playbook-docker-compose.yml: sudo rule for docker / docker-compose
-  - path: /etc/sudoers.d/mlops_docker
+  - path: /etc/sudoers.d/uvg_docker
     permissions: "0440"
     content: |
-      mlops ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/local/bin/docker-compose
+%{ for user in users ~}
+      ${user} ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/local/bin/docker-compose
+%{ endfor ~}
   # Keeps the `docker-compose` command working on top of Compose v2
   - path: /usr/local/bin/docker-compose
     permissions: "0755"

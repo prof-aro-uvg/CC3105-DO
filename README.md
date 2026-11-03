@@ -4,10 +4,10 @@ Infrastructure as code for the CC3105 MLOps course lab environment. Terraform cr
 
 After a single `terraform apply`, every droplet has:
 
-- an `mlops` user (SSH key login only) in a shared `uvg` group
+- two course users, `mlops` and `cc3105` (SSH key login only), in a shared `uvg` group
 - a shared project directory, `/srv/projects/pf`
 - Apache 2 with `mod_rewrite`
-- Docker Engine and Docker Compose v2, with passwordless `sudo` for `mlops` on `docker` / `docker-compose`
+- Docker Engine and Docker Compose v2, with passwordless `sudo` for both users on `docker` / `docker-compose`
 - a default `ubuntu` image pulled and a `docker1` container created
 - the `America/Guatemala` timezone and a daily 19:00 shutdown timer
 
@@ -78,13 +78,13 @@ terraform apply
 | Base image | Ubuntu 22.04 (`ubuntu-22-04-x64`), `s-1vcpu-1gb`, region `sfo2`, tags `mlops`, `uvg` | `droplets.tf` |
 | Root access | The DigitalOcean SSH key `mba` is installed for `root` | `droplets.tf` |
 | Timezone | `America/Guatemala` | `set_timezone.yml` |
-| Users and groups | Group `uvg`; user `mlops` (`/bin/bash`, password locked, `mba` public key in `authorized_keys`, member of `uvg`) | `basic_config.sh`, `docker-install.yml` |
+| Users and groups | Group `uvg`; users `mlops` and `cc3105` (set by `users`), each with `/bin/bash`, password locked, `mba` public key in `authorized_keys`, member of `uvg` | `basic_config.sh`, `docker-install.yml` |
 | Shared directory | `/srv/projects/pf`, owner `root:uvg`, mode `2770` (setgid, so new files inherit the `uvg` group) | `basic_config.sh` |
 | Web server | `apache2` installed, `mod_rewrite` enabled, service restarted | `docker-install.yml` |
 | Base packages | `aptitude`, `apt-transport-https`, `ca-certificates`, `curl`, `gnupg`, `lsb-release`, `software-properties-common`, `python3-pip`, `python3-setuptools`, `python3-docker`, `virtualenv` | `playbook-docker.yml`, `playbook-docker-compose.yml` |
 | Docker | Official Docker apt repository for the droplet's Ubuntu release; `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin` | `playbook-docker.yml`, `playbook-docker-compose.yml` |
 | `docker-compose` command | `/usr/local/bin/docker-compose`, a wrapper that runs `docker compose "$@"` | `playbook-docker-compose.yml` |
-| sudo | `/etc/sudoers.d/mlops_docker`: `mlops ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/local/bin/docker-compose` | `playbook-docker-compose.yml` |
+| sudo | `/etc/sudoers.d/uvg_docker`: one line per user, e.g. `cc3105 ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/local/bin/docker-compose` | `playbook-docker-compose.yml` |
 | Default containers | `docker pull ubuntu`, then `docker create --name docker1 ubuntu sleep 1` (created, not started) | `playbook-docker.yml` |
 | Daily shutdown | `shutdown-at-19.service` + `shutdown-at-19.timer`, run every day at 19:00 local time | `shutdown_timer.yml` |
 
@@ -136,7 +136,8 @@ Root variable:
 |---|---|---|---|
 | `droplet_count` | `number` | — (required) | Number of droplets; validated `>= 2` |
 | `group_name` | `string` | — (required) | Droplet name prefix |
-| `ssh_key_name` | `string` | `"mba"` | DigitalOcean SSH key used for `root` and `mlops` |
+| `ssh_key_name` | `string` | `"mba"` | DigitalOcean SSH key used for `root` and every user in `users` |
+| `users` | `list(string)` | `["mlops", "cc3105"]` | Users created on every droplet, all with the same permissions (`uvg` member, SSH key login, passwordless `sudo` for docker/docker-compose) |
 | `region` | `string` | `"sfo2"` | Region slug |
 | `size` | `string` | `"s-1vcpu-1gb"` | Size slug |
 | `image` | `string` | `"ubuntu-22-04-x64"` | Image slug |
@@ -148,7 +149,7 @@ Root variable:
 | `container_image` | `string` | `"ubuntu"` | Image for the default containers |
 | `container_command` | `string` | `"sleep 1"` | Command for the default containers |
 
-Example: three bigger droplets in `sfo3` without the shutdown timer:
+Example: three bigger droplets in `sfo3`, without the shutdown timer and with an extra user:
 
 ```hcl
 module "groups" {
@@ -161,6 +162,7 @@ module "groups" {
   region        = "sfo3"
   size          = "s-2vcpu-2gb"
   shutdown_time = null
+  users         = ["mlops", "cc3105", "student1"]
 }
 ```
 
@@ -185,7 +187,7 @@ cloud-init status --wait                  # blocks until first-boot setup finish
 tail -n 50 /var/log/cloud-init-output.log # full log of the setup
 
 timedatectl | grep "Time zone"            # America/Guatemala
-id mlops                                  # ... groups=...(uvg)
+id mlops; id cc3105                       # ... groups=...(uvg)
 ls -ld /srv/projects/pf                   # drwxrws--- root uvg
 apache2ctl -M | grep rewrite              # rewrite_module (shared)
 docker --version && docker compose version
@@ -193,10 +195,10 @@ docker ps -a                              # docker1 (Created)
 systemctl list-timers shutdown-at-19.timer
 ```
 
-As `mlops`:
+As `mlops` or `cc3105`:
 
 ```bash
-ssh mlops@<ip>
+ssh cc3105@<ip>
 sudo docker ps -a            # no password prompt
 sudo docker-compose version  # wrapper around "docker compose"
 ```
@@ -268,7 +270,7 @@ The playbooks were translated into cloud-init. These problems in the originals w
 | `docker-install.yml` handler: `name`/`state` not indented under `service:` | Apache is restarted explicitly after `a2enmod rewrite` |
 | Docker Compose v1.29.2 standalone binary (no longer supported) | Compose v2 plugin + `docker-compose` wrapper, so existing commands and the sudo rule keep working |
 | `Persistent=true` on the shutdown timer would shut the droplet down right after it was powered on the next day | `Persistent` removed |
-| `basic_config.sh` set the `mlops` password interactively (`passwd`) | `mlops` uses SSH keys only; the password is locked |
+| `basic_config.sh` set the `mlops` password interactively (`passwd`) | Users log in with SSH keys only; passwords are locked |
 | Legacy provider block inside the child module | Provider configured in the root module |
 | `droplet_count >= 2` precondition was skipped when `droplet_count = 0` | Replaced by a variable `validation` block |
 
@@ -279,7 +281,7 @@ Not carried over:
 ## Security notes
 
 - **Never commit** `terraform.tfvars`, `*.tfstate` or tokens. `.gitignore` already excludes them, and this repository is public.
-- `mlops` can run `docker` as root without a password. Docker access is effectively root access, so only give the `mba` key to people who should have that.
+- `mlops` and `cc3105` can run `docker` as root without a password. Docker access is effectively root access, so only give the `mba` key to people who should have that.
 - `root` SSH login stays enabled because the inventory uses `ansible_user=root`. Consider disabling it once Ansible is no longer used.
 - No DigitalOcean firewall is defined. Apache (80) and SSH (22) are reachable from anywhere.
 
