@@ -1,0 +1,104 @@
+#cloud-config
+# Rendered by Terraform (templatefile). Runs once, on the droplet's first boot.
+# Log on the droplet: /var/log/cloud-init-output.log
+
+# --- set_timezone.yml / shutdown_timer.yml ---
+timezone: ${timezone}
+
+# --- basic_config.sh: uvg group + mlops user (SSH key only, no password) ---
+groups:
+  - uvg
+
+users:
+  - default
+  - name: mlops
+    shell: /bin/bash
+    groups: [uvg]
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "${ssh_public_key}"
+
+# --- docker-install.yml, playbook-docker.yml, playbook-docker-compose.yml: packages ---
+package_update: true
+packages:
+  - aptitude
+  - apache2
+  - apt-transport-https
+  - ca-certificates
+  - curl
+  - gnupg
+  - lsb-release
+  - software-properties-common
+  - python3-pip
+  - python3-setuptools
+  - python3-docker
+  - virtualenv
+
+write_files:
+  # playbook-docker-compose.yml: sudo rule for docker / docker-compose
+  - path: /etc/sudoers.d/mlops_docker
+    permissions: "0440"
+    content: |
+      mlops ALL=(ALL) NOPASSWD: /usr/bin/docker, /usr/local/bin/docker-compose
+  # Keeps the `docker-compose` command working on top of Compose v2
+  - path: /usr/local/bin/docker-compose
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      exec /usr/bin/docker compose "$@"
+%{ if shutdown_time != null ~}
+  # shutdown_timer.yml
+  - path: /etc/systemd/system/shutdown-at-19.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Daily shutdown at ${shutdown_time} (${timezone})
+
+      [Service]
+      Type=oneshot
+      ExecStart=/sbin/shutdown -h now
+  - path: /etc/systemd/system/shutdown-at-19.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Run shutdown-at-19.service daily at ${shutdown_time} (${timezone})
+
+      [Timer]
+      OnCalendar=*-*-* ${shutdown_time}:00
+      # Persistent=true deliberately omitted: it would fire the missed shutdown
+      # right after the droplet is powered back on the next day.
+
+      [Install]
+      WantedBy=timers.target
+%{ endif ~}
+
+runcmd:
+  # basic_config.sh: shared project directory, group-owned, setgid
+  - mkdir -p /srv/projects/pf
+  - chown -R root:uvg /srv/projects/pf
+  - chmod 2770 /srv/projects/pf
+
+  # docker-install.yml: enable mod_rewrite and restart apache
+  - a2enmod rewrite
+  - systemctl restart apache2
+
+  # playbook-docker.yml / playbook-docker-compose.yml: Docker repo for this Ubuntu release
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - docker compose version
+
+  # playbook-docker.yml: pull the default image and create (not start) the default containers
+  - docker pull ${container_image}
+%{ for i in range(1, container_count + 1) ~}
+  - docker create --name ${container_name}${i} ${container_image} ${container_command}
+%{ endfor ~}
+%{ if shutdown_time != null ~}
+
+  # shutdown_timer.yml
+  - systemctl daemon-reload
+  - systemctl enable --now shutdown-at-19.timer
+%{ endif ~}
